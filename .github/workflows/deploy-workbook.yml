@@ -1,0 +1,84 @@
+name: Deploy portrait review workbook
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Render source workbook
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib
+          import html
+          import pathlib
+          import re
+          
+          source = pathlib.Path('README.md').read_text(encoding='utf-8')
+          assert hashlib.sha256(source.encode('utf-8')).hexdigest() == 'a9a90dc253e8b6cb0ebc065a0e1cd8b5fdd11056f2cba947e0944597317766f6'
+          assert '[ai baby generator](https://ai-baby-generator.org/)' in source
+          
+          
+          def inline(value):
+              value = html.escape(value)
+              value = re.sub(r'!\[([^\]]*)\]\((https://[^\s)]+)\)', r'<img alt="\1" src="\2">', value)
+              return re.sub(r'\[([^\]]+)\]\((https://[^\s)]+)\)', r'<a href="\2">\1</a>', value)
+          
+          
+          def table(lines):
+              rows = [[cell.strip() for cell in line.strip().strip('|').split('|')] for line in lines]
+              header = '<thead><tr>' + ''.join('<th scope="col">' + inline(x) + '</th>' for x in rows[0]) + '</tr></thead>'
+              body = '<tbody>' + ''.join('<tr>' + ''.join('<td>' + inline(x) + '</td>' for x in row) + '</tr>' for row in rows[2:]) + '</tbody>'
+              return '<table>' + header + body + '</table>'
+          
+          
+          blocks = []
+          for block in source.strip().split('\n\n'):
+              lines = block.splitlines()
+              if all(line.startswith('|') for line in lines) and len(lines) >= 2:
+                  blocks.append(table(lines))
+              elif len(lines) == 1 and lines[0].startswith('## '):
+                  blocks.append('<h2>' + inline(lines[0][3:]) + '</h2>')
+              elif len(lines) == 1 and lines[0].startswith('# '):
+                  blocks.append('<h1>' + inline(lines[0][2:]) + '</h1>')
+              elif all(line.startswith('- ') for line in lines):
+                  blocks.append('<ul>' + ''.join('<li>' + inline(line[2:]) + '</li>' for line in lines) + '</ul>')
+              else:
+                  blocks.append('<p>' + inline(' '.join(lines)) + '</p>')
+          
+          page = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                  '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                  '<title>Imagined portrait consent and review workbook</title>'
+                  '<style>body{font:18px/1.6 system-ui,sans-serif;max-width:48rem;margin:2rem auto;padding:0 1rem;color:#202a37}'
+                  'img{max-width:100%;height:auto}a{color:#174f9c}table{border-collapse:collapse}th,td{border:1px solid #777;padding:.5rem;text-align:left}</style>'
+                  '</head><body><main>' + '\n'.join(blocks) + '</main></body></html>')
+          out = pathlib.Path('_site')
+          out.mkdir(exist_ok=True)
+          (out / 'index.html').write_text(page, encoding='utf-8')
+          PYCODE
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
